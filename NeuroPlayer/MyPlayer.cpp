@@ -16,23 +16,23 @@
 
 using namespace std;
 
-mt19937 eng;
-uniform_int_distribution<> dist(1, 50000);
-
-
 const double EPS = 1e-5;
+
+random_device rd2;
+mt19937 eng2(rd2());
+uniform_int_distribution<> dst2(1, 50000);
 
 enum Actions { FORWARD, BACKWARD, LEFTSTEP, RIGHTSTEP, COUNT };
 
-const int SENSOR_COUNT = 16;
+const int SENSOR_COUNT = 8;
 const int INPUT_NEURON_COUNT = SENSOR_COUNT * 2;
 const int OUTPUT_NEURON_COUNT = 1;
-const int HIDDEN_NEURON_COUNT = INPUT_NEURON_COUNT*2;
+const int HIDDEN_NEURON_COUNT = INPUT_NEURON_COUNT*1.5;
 const int LAYER_COUNT = 2;
-const int EPOCH_COUNT = 20;
-const int TRAINSET_SIZE = 30;
-const int TRAINING_TICKS = 2000;
-const int RANDOM_TRAINING = 5;
+const int EPOCH_COUNT = 100;
+const int TRAINSET_SIZE = 50;
+const int TRAINING_TICKS = 1;
+const int RANDOM_TRAINING = 1;
 int ACTIVATION_FUNCTIONS[] = {TANH, LINE};
 int LAYER_SIZES[] = { HIDDEN_NEURON_COUNT, OUTPUT_NEURON_COUNT };
 
@@ -82,6 +82,7 @@ void MyPlayer::Init()
 	Params.Error = 0.001;
 	Params.MinGrad = 0.00001;
 	Params.NumEpochs = EPOCH_COUNT;
+	Params.Rate = 0.001;
 }
 
 bool check(Element *player, double x, double y, double angle, double step_angle)
@@ -366,7 +367,7 @@ void MyPlayer::Move()
 	//debug << inputs << endl;
 	vr(1, 1) = GetFullness();
 
-	int rnd = dist(eng);
+	int rnd = dst2(eng2);
 	int action = rnd % Actions::COUNT;
 	if (!FirstStep)
 	{
@@ -391,7 +392,7 @@ void MyPlayer::Move()
 		{
 			//debug << "TICK " << tick << endl;
 			vector<double> training_error;
-			nets[lastAction].RPropTrain(Params, training_error);
+			nets[lastAction].RMSPropTrain(Params, training_error);
 		}
 	}
 

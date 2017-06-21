@@ -42,6 +42,7 @@ private:
 	
 	void GenerateBonuses();
 	void GenerateFood();
+	void GenerateTraps();
 	void GenerateWeapon();
 
 	void UpdateBonuses();

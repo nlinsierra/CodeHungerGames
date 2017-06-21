@@ -31,6 +31,7 @@ void World::Run() {
 	LoadPlayers();
 	//debugout << "Players are loaded" << endl;
 	GenerateBonuses();
+	//GenerateTraps();
 	//debugout << "Bonuses are generated" << endl;
 	RenderFull();
 	//debugout << "First render" << endl;
@@ -231,9 +232,20 @@ void World::GenerateFood() {
 		NewFood->SetCoords(rand() % 600 + 20, rand() % 425 + 20);
 		NewFood->SetR(10);
 		NewFood->SetLifetime(rand() % 200 + 10);
-		if (rand() % 20 == 1) NewFood->SetDamage(rand() % 500);
-		else NewFood->SetFullness(30);
+		//if (rand() % 20 == 1) NewFood->SetDamage(rand() % 500);
+		NewFood->SetFullness(30);
 		WorldFood.emplace_back(NewFood);
+	}
+}
+
+void World::GenerateTraps() {
+	int TrapCount = rand() % 20;
+	for (int i = 0; i < TrapCount; ++i) {
+		Trap *NewTrap = new Trap();
+		NewTrap->SetCoords(rand() % 600 + 20, rand() % 425 + 20);
+		NewTrap->SetR(rand() % 50);
+		NewTrap->SetDamage(30);
+		Traps.emplace_back(NewTrap);
 	}
 }
 
