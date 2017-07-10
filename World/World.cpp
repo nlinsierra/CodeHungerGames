@@ -11,6 +11,10 @@ bool	   stopFlag = false;
 const int MOVE_EXCEPTION	=	1;
 const int OK				=	0;
 
+const int PLAYER_SPEED = 10;
+
+D3DCOLOR Colors[] = { D3DCOLOR_XRGB(255, 102, 0), D3DCOLOR_XRGB(51, 0, 204), D3DCOLOR_XRGB(0, 255, 0), D3DCOLOR_XRGB(252, 131, 10) };
+
 using namespace std;
 
 DWORD WINAPI DoMove(LPVOID lpParam) {
@@ -33,7 +37,7 @@ void World::Run() {
 	GenerateBonuses();
 	//GenerateTraps();
 	//debugout << "Bonuses are generated" << endl;
-	RenderFull();
+	Render();
 	//debugout << "First render" << endl;
 
 	int TickCount = 500000;
@@ -42,6 +46,7 @@ void World::Run() {
 		if (stopFlag) return;
 		for (int j = 0; j < Players.size(); ++j) {
 			if (stopFlag) return;
+			Players[j]->SetColor(Colors[j]);
 			if (Players[j]->GetHealth()) {
 				//debugout << "Before RunTime and TimeLimit Check" << endl;
 				if (!Players[j]->RunTime && !Players[j]->TimeLimit) {
@@ -58,13 +63,12 @@ void World::Run() {
 					Players[j]->RunTime = PlayerExitCode != OK;
 					Players[j]->TimeLimit = WaitResult != WAIT_OBJECT_0;
 				}
-				if (!Players[j]->GetFullness()) Players[j]->SetHealth(max(Players[j]->GetHealth() - 5, 0));
+				/*if (!Players[j]->GetFullness()) Players[j]->SetHealth(max(Players[j]->GetHealth() - 5, 0));
 				else {
-					if (Players[j]->GetFullness() > 250 && Players[j]->GetHealth() < 1000)
-						Players[j]->SetHealth(min(Players[j]->GetHealth() + 2, 1000));
-					Players[j]->SetFullness(max(Players[j]->GetFullness() - 0, 0));
-					//Players[j]->SetFullness(max(Players[j]->GetFullness() - 1, 0));
-				}
+					if (Players[j]->GetFullness() > 250 && Players[j]->GetHealth() < 10000)
+						Players[j]->SetHealth(min(Players[j]->GetHealth() + 20, 10000000));
+					Players[j]->SetFullness(max(Players[j]->GetFullness() - 1, 0));
+				}*/
 			}
 
 			//debugout << "Check food" << endl;
@@ -72,8 +76,10 @@ void World::Run() {
 			for (auto i = 0; i < Food.size(); ++i) {
 				if (Players[j]->GetDistanceTo(Food[i]) < double(Players[j]->GetR() + Food[i]->GetR())) {
 					Food[i]->SetTaken();
-					if (Food[i]->GetDamage() != 0) Players[j]->SetHealth(max(Players[j]->GetHealth() - Food[i]->GetDamage(), 0));
-					//else Players[j]->SetFullness(min(Players[j]->GetFullness() + Food[i]->GetFullness(), 300));
+					if (Food[i]->GetDamage() != 0) {
+						Players[j]->SetHealth(max(Players[j]->GetHealth() - Food[i]->GetDamage(), 0));
+						Players[j]->SetColor(D3DCOLOR_XRGB(255, 153, 153));
+					}
 				else Players[j]->SetFullness(min(Players[j]->GetFullness() + Food[i]->GetFullness(), INT_MAX));
 				}
 			}
@@ -173,15 +179,19 @@ void World::LoadPlayers() {
 	do
 	{
 		if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-		else PlayerFiles.emplace_back(wstring(ffd.cFileName));
+		wstring fileName = wstring(ffd.cFileName);
+		if (fileName.length() < 4) continue;
+		wstring extension = fileName.substr(fileName.length() - 3, 3);
+		if (extension != wstring(L"dll")) continue;
+		PlayerFiles.emplace_back(wstring(ffd.cFileName));
 	} while (FindNextFile(hFind, &ffd) != 0);
 
 	FindClose(hFind);
 
 	////debugout << "Players count: " << PlayerFiles.size() << endl;
 
-	D3DCOLOR Colors[] = { D3DCOLOR_XRGB(255,0,0), D3DCOLOR_XRGB(0,0,255), D3DCOLOR_XRGB(0, 255, 0), D3DCOLOR_XRGB(252, 131, 10) };
-	pair<int, int> Coords[] = { {620, 460}, {540, 100}, {100, 380}, {540, 380} };
+	
+	pair<int, int> Coords[] = { {200, 200}, {540, 100}, {100, 380}, {540, 380} };
 
 	for (int i = 0; i < PlayerFiles.size(); ++i) {
 		auto hLib = LoadLibrary((L"players\\" + PlayerFiles[i]).c_str());
@@ -196,12 +206,12 @@ void World::LoadPlayers() {
 				NewPlayer->SetCoords(Coords[i].first, Coords[i].second);
 				NewPlayer->SetR(20);
 				NewPlayer->SetWorld(this);
-				NewPlayer->SetSpeed(30);
+				NewPlayer->SetSpeed(PLAYER_SPEED);
 				NewPlayer->SetAngle(M_PI*0.5);
 				//NewPlayer->SetFullness(300);
-				NewPlayer->SetFullness(1);
+				NewPlayer->SetFullness(1000);
 				//NewPlayer->SetHealth(1000);
-				NewPlayer->SetHealth(INT_MAX);
+				NewPlayer->SetHealth(100000);
 				NewPlayer->SetColor(Colors[i]);
 				//debugout << "Player " << PlayerFiles[i] << " library begin init" << endl;
 				NewPlayer->Init();
@@ -229,10 +239,26 @@ void World::GenerateFood() {
 	int FoodCount = rand() % 50;
 	for (int i = 0; i < FoodCount; ++i) {
 		Food *NewFood = new Food();
-		NewFood->SetCoords(rand() % 600 + 20, rand() % 425 + 20);
+		auto NewX = rand() % 600 + 20;
+		auto NewY = rand() % 425 + 20;
 		NewFood->SetR(10);
-		NewFood->SetLifetime(rand() % 200 + 10);
-		//if (rand() % 20 == 1) NewFood->SetDamage(rand() % 500);
+		while (true) {
+			bool ok = true;
+			for (auto cur_block : Blocks) {
+				double cur_dist = sqrt(double(cur_block->GetX() - NewX)*(cur_block->GetX() - NewX) + double(cur_block->GetY() - NewY)*(cur_block->GetY() - NewY));
+				if (cur_dist < cur_block->GetR() + NewFood->GetR()) {
+					ok = false;
+					break;
+				}				
+			}
+			if (ok) break;
+			NewX = rand() % 600 + 20;
+			NewY = rand() % 425 + 20;
+		}
+		NewFood->SetCoords(NewX, NewY);
+		//NewFood->SetLifetime(rand() % 2000 + 10);
+		NewFood->SetLifetime(INT_MAX);
+		if (rand() % 5 == 1) NewFood->SetDamage(rand() % 500);
 		NewFood->SetFullness(30);
 		WorldFood.emplace_back(NewFood);
 	}
@@ -319,7 +345,7 @@ void World::UpdateBonuses() {
 
 void World::Render() {
 	////debugout << "Render start" << endl;
-	d3ddev->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(10, 10, 10), 1.0f, 0);
+	d3ddev->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(255, 255, 255), 1.0f, 0);
 
 	d3ddev->BeginScene();    // begins the 3D scene
 
@@ -345,13 +371,13 @@ void World::Render() {
 		////debugout << "Name: " << CurName << endl;
 		CurCoord = { 0, i * 20, 500, i * 20 + 20 };
 		wsprintf(CurMessage, L"%s: H%d F%d", CurName.c_str(), Players[i]->GetHealth(), Players[i]->GetFullness());
-		DrawTextString(d3ddev, &CurCoord, Players[i]->GetColor(), CurMessage);
+		DrawTextString(d3ddev, &CurCoord, D3DCOLOR_XRGB(0, 0, 0), CurMessage);
 	}
 
 	//CurCoord = { GetWidth() / 2 - 50, GetHeight() - 100, GetWidth() / 2 + 50, GetHeight() };
-	CurCoord = { GetWidth() - 50, GetHeight() - 50, GetWidth() - 10, GetHeight() - 30 };
+	CurCoord = { GetWidth() - 80, GetHeight() - 50, GetWidth() - 10, GetHeight() - 30 };
 	wsprintf(CurMessage, L"%d", CurTime);
-	DrawTextString(d3ddev, &CurCoord, D3DCOLOR_XRGB(255, 255, 255), CurMessage);
+	DrawTextString(d3ddev, &CurCoord, D3DCOLOR_XRGB(0, 0, 0), CurMessage);
 
 	//RenderTexture(d3ddev, 0, 0);
 

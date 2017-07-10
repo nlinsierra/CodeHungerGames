@@ -1,5 +1,7 @@
 #pragma once
 
+#define POINTER_MATRIX
+
 #include <stdio.h>
 #include <math.h>
 #include <string>
@@ -8,9 +10,16 @@
 #include <algorithm>
 #include <iterator>
 #include <omp.h>
+#include <memory.h>
+#include <memory>
 #include <queue>
+#include <random>
 
 using namespace std;
+
+extern random_device rd;
+extern mt19937 eng;
+extern uniform_int_distribution<> dst;
 
 // Класс для работы с двумерными матрицами
 ////////////////////////////////////////////////////////////////////////////////
@@ -18,25 +27,71 @@ class Matrix2D {
 private:
 	int						RowCount;			// Число строк
 	int						ColCount;			// Число столбцов
+#ifdef POINTER_MATRIX
+	unique_ptr<double[]>	MatrixElements;		// Массив элементов матрицы
+#else
 	vector<vector<double>>	MatrixElements;		// Массив элементов матрицы
+#endif
 
 public:
 	// Конструктор
-	Matrix2D(void) : RowCount(0), ColCount(0) {};
-	Matrix2D(int r, int c) : RowCount(r), ColCount(c), MatrixElements(vector<vector<double>>(r, vector<double>(c, 0.0))) {};
-	Matrix2D(const vector<vector<double>> &v) : MatrixElements(move(v)), RowCount(v.size()), ColCount((v.size() ? v.back().size() : 0)) {};
-	Matrix2D(const deque<vector<double>> &v) {
-		MatrixElements.resize(v.size());
-		RowCount = v.size();
-		for (int i = 0; i < v.size(); ++i) {
-			ColCount = v[i].size();
-			MatrixElements[i] = v[i];
-		}
+#ifdef POINTER_MATRIX
+	Matrix2D(void) : RowCount(0), ColCount(0), MatrixElements(nullptr) {};
+	Matrix2D(const int &r, const int &c) : RowCount(r), ColCount(c) { 
+		MatrixElements = unique_ptr<double[]>(new double[r*c]);
+		memset(MatrixElements.get(), 0, r*c * sizeof(double)); 
 	};
+	Matrix2D(const vector<vector<double>> &v) {
+		RowCount = v.size(); ColCount = (RowCount ? v[0].size() : 0);
+		MatrixElements = unique_ptr<double[]>(new double[RowCount*ColCount]);
+		int counter = 0;
+		for (int i = 0; i < RowCount; ++i)
+			for (int j = 0; j < ColCount; ++j) {
+				MatrixElements.get()[counter++] = v[i][j];
+			}
+	};
+	Matrix2D(const deque<vector<double>> &v) {
+		RowCount = v.size(); ColCount = (RowCount ? v[0].size() : 0);
+		MatrixElements = unique_ptr<double[]>(new double[RowCount*ColCount]);
+		int counter = 0;
+		for (int i = 0; i < RowCount; ++i)
+			for (int j = 0; j < ColCount; ++j) {
+				MatrixElements.get()[counter++] = v[i][j];
+			}
+
+	};
+	Matrix2D(const Matrix2D &m) {
+		ColCount = m.ColCount;
+		RowCount = m.RowCount;
+		MatrixElements = unique_ptr<double[]>(new double[RowCount*ColCount]);
+		memcpy(MatrixElements.get(), m.MatrixElements.get(), ColCount*RowCount * sizeof(double));
+	}
+	Matrix2D& operator=(const Matrix2D &m) {
+		ColCount = m.ColCount;
+		RowCount = m.RowCount;
+		MatrixElements = unique_ptr<double[]>(new double[RowCount*ColCount]);
+		memcpy(MatrixElements.get(), m.MatrixElements.get(), ColCount*RowCount * sizeof(double));
+		return *this;
+	}
+#else
+	Matrix2D(void) : RowCount(0), ColCount(0) {};
+	Matrix2D(const int &r, const int &c) : RowCount(r), ColCount(c), MatrixElements(vector<vector<double>>(r, vector<double>(c, 0.0))) {};
+	Matrix2D(const vector<vector<double>> &v) : RowCount(v.size()), ColCount((v.size() ? v[0].size() : 0)), MatrixElements(v) {};
+	Matrix2D(const deque<vector<double>> &v) {
+		RowCount = v.size(); ColCount = (RowCount ? v[0].size() : 0);
+		MatrixElements.resize(RowCount, vector<double>(ColCount, 0.0));
+		for (int i = 0; i < RowCount; ++i)
+			for (int j = 0; j < ColCount; ++j)
+				MatrixElements[i][j] = v[i][j];
+	};
+#endif
 
 	int						GetRowCount() const { return RowCount; }; // Число строк
 	int						GetColCount() const { return ColCount; }; // Число столбцов
+
+#ifndef POINTER_MATRIX
 	vector<vector<double>>	GetVector() { return MatrixElements; };
+#endif
 
 	double&					operator()(const int i, const int j); // Значение элемента матрицы
 	double					operator()(const int i, const int j) const; // Значение элемента матрицы
@@ -61,6 +116,9 @@ public:
 
 													// Перевод двумерной матрицы в одномерный массив с порядком хранения
 													// данных по строкам
+#ifdef POINTER_MATRIX
+	double* Matrix2DToPointer() { return MatrixElements.get(); };
+#else
 	vector<double> Matrix2DToVector() {
 		vector<double> LineMatrixElements;
 		for_each(MatrixElements.begin(), MatrixElements.end(), [&LineMatrixElements](vector<double> CurRow) {
@@ -68,6 +126,7 @@ public:
 		});
 		return LineMatrixElements;
 	};
+#endif
 	void					ShowElements();
 };
 ////////////////////////////////////////////////////////////////////////////////
@@ -78,7 +137,11 @@ public:
 // Операции для работы над матрицами
 ////////////////////////////////////////////////////////////////////////////////
 Matrix2D CalculateOnes(int SizeNum);
+#ifdef POINTER_MATRIX
+Matrix2D PointerToMatrix2D(double *p, int NumRows, int NumCols);
+#else
 Matrix2D VectorToMatrix2D(vector<double> p, int NumRows, int NumCols);
+#endif
 ////////////////////////////////////////////////////////////////////////////////
 
 

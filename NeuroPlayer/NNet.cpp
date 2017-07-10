@@ -1,12 +1,11 @@
 #include "NNet.h"
+#include <fstream>
 
 using namespace std;
 
 bool StopTraining = false;
 
-random_device rd;
-mt19937 eng(rd());
-uniform_int_distribution<> dst(1, 50000);
+ofstream debugout("nnetdebug.txt");
 
 
 /////////////////////////// Функции класса слоев ///////////////////////////////
@@ -140,8 +139,16 @@ void Net::InitLayers(int NumInputs, int NumLayers, int AFun[], int NumLN[]) {
 	}
 	// Заполнение единого вектора весов и смещений
 	WeightsBiases__ = Matrix2D(GetNumWeights() + GetNumBiases(), 1);
+#ifdef POINTER_MATRIX
+	double *pw = GetWeights(), *pb = GetBiases();
+	TmpW = PointerToMatrix2D(pw, GetNumWeights(), 1);
+	TmpB = PointerToMatrix2D(pb, GetNumBiases(), 1);
+	delete[] pw;
+	delete[] pb;
+#else
 	TmpW = VectorToMatrix2D(GetWeights(), GetNumWeights(), 1);
 	TmpB = VectorToMatrix2D(GetBiases(), GetNumBiases(), 1);
+#endif
 	for (int i = 1; i <= GetNumWeights(); i++) WeightsBiases__(i, 1) = TmpW(i, 1);
 	for (int i = GetNumWeights() + 1; i <= GetNumWeights() + GetNumBiases(); i++)
 		WeightsBiases__(i, 1) = TmpB(i - GetNumWeights(), 1);
@@ -169,7 +176,11 @@ void Net::WBNetToLayers() {
 		for (int j = WCount; j < WCount + w.GetRowCount(); j++)
 			w(count++, 1) = Wt(j, 1);
 		WCount += w.GetRowCount();
+#ifdef POINTER_MATRIX
+		Layers__[i].Weights(PointerToMatrix2D(w.Matrix2DToPointer(), Layers__[i].NumNeurons(), Layers__[i - 1].NumNeurons()));
+#else
 		Layers__[i].Weights(VectorToMatrix2D(w.Matrix2DToVector(), Layers__[i].NumNeurons(), Layers__[i - 1].NumNeurons()));
+#endif
 		b = Matrix2D(Layers__[i].NumNeurons(), 1);
 		count = 1;
 		for (int j = BCount; j < BCount + b.GetRowCount(); j++)
@@ -204,43 +215,66 @@ int Net::GetNumBiases() {
 
 // Возврат вектора весовых коэффициентов
 ////////////////////////////////////////////////////////////////////////////////
+#ifdef POINTER_MATRIX
+double* Net::GetWeights() {
+	double* w = new double[GetNumWeights()];
+	int counter = 0;
+	for (int i = 1; i <= NumLayers(); i++)
+		for (int j = 1; j <= Layers__[i].NumNeurons(); j++)
+			for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++)
+				w[counter++] = (Layers__[i].Weights(j, k));
+	return w;
+}
+#else
 vector<double> Net::GetWeights() {
 	vector<double> w;
 	for (int i = 1; i <= NumLayers(); i++)
 		for (int j = 1; j <= Layers__[i].NumNeurons(); j++)
 			for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++)
-				w.emplace_back(Layers__[i].Weights(j, k));
+				w.push_back(Layers__[i].Weights(j, k));
 	return w;
 }
+#endif
 ////////////////////////////////////////////////////////////////////////////////
 
 
 // Возврат вектора смещений нейронов
 ////////////////////////////////////////////////////////////////////////////////
+#ifdef POINTER_MATRIX
+double* Net::GetBiases() {
+	double* b = new double[GetNumBiases()];
+	int counter = 0;
+	for (int i = 1; i <= NumLayers(); i++)
+		for (int j = 0; j < Layers__[i].NumNeurons(); j++)
+			b[counter++] = (Layers__[i].Neurons(j).Bias());
+	return b;
+}
+#else
 vector<double> Net::GetBiases() {
 	vector<double> b;
 	for (int i = 1; i <= NumLayers(); i++)
 		for (int j = 0; j < Layers__[i].NumNeurons(); j++)
-			b.emplace_back(Layers__[i].Neurons(j).Bias());
+			b.push_back(Layers__[i].Neurons(j).Bias());
 	return b;
 }
+#endif
 ////////////////////////////////////////////////////////////////////////////////
 
 
 // Вычисление градиента вектора ошибки по смещениям
 ////////////////////////////////////////////////////////////////////////////////
-vector<Matrix2D> Net::CalculateDelta(const Matrix2D &SimOut, const Matrix2D &AimOut) {
+vector<Matrix2D> Net::CalculateDelta(Matrix2D SimOut, Matrix2D AimOut) {
 	vector<Matrix2D> Delta(NumLayers());
 	// Дельта для выходного слоя нейронов
 	double Diff = 0.0;
-	Delta[NumLayers() - 1] = Matrix2D(NumOutputs(), 1);
+	Delta[NumLayers() - 1] = move(Matrix2D(NumOutputs(), 1));
 	for (int i = 1; i <= NumOutputs(); i++) {
 		Diff = Layers__[NumLayers()].Neurons(i - 1).Derivative();
 		Delta[NumLayers() - 1](i, 1) = (SimOut(i, 1) - AimOut(i, 1))*Diff;
 	}
 	// Расчет для остальных слоев сети
 	for (int LayerCount = NumLayers() - 1; LayerCount > 0; LayerCount--) {
-		Delta[LayerCount - 1] = move(Matrix2D(Layers__[LayerCount].NumNeurons(), 1));
+		Delta[LayerCount - 1] = Matrix2D(Layers__[LayerCount].NumNeurons(), 1);
 		for (int i = 1; i <= Delta[LayerCount - 1].GetRowCount(); i++) {
 			// Суммирование дельта нейронов следующего слоя
 			double Sum = 0;
@@ -258,7 +292,7 @@ vector<Matrix2D> Net::CalculateDelta(const Matrix2D &SimOut, const Matrix2D &Aim
 
 // Вычисление градиента
 ////////////////////////////////////////////////////////////////////////////////
-Matrix2D Net::CalculateGradient(const Matrix2D &SimOut, const Matrix2D &AimOut) {
+Matrix2D Net::CalculateGradient(Matrix2D SimOut, Matrix2D AimOut) {
 	vector<Matrix2D> Delta, Gradient(NumLayers());
 	Matrix2D ResultGrad(GetNumWeights() + GetNumBiases(), 1);
 	double Axon = 0.0;
@@ -266,7 +300,7 @@ Matrix2D Net::CalculateGradient(const Matrix2D &SimOut, const Matrix2D &AimOut) 
 	Delta = CalculateDelta(SimOut, AimOut);
 	NumNeurons = NumOutputs();
 	NumPrevNeurons = Layers__[NumLayers() - 1].NumNeurons();
-	Gradient[NumLayers() - 1] = move(Matrix2D(NumNeurons, NumPrevNeurons));
+	Gradient[NumLayers() - 1] = Matrix2D(NumNeurons, NumPrevNeurons);
 	for (int i = 1; i <= NumNeurons; i++)
 		for (int j = 1; j <= NumPrevNeurons; j++) {
 			Axon = Layers__[NumLayers() - 1].Neurons(j - 1).Axon();
@@ -275,7 +309,7 @@ Matrix2D Net::CalculateGradient(const Matrix2D &SimOut, const Matrix2D &AimOut) 
 	for (int LayerCount = NumLayers() - 1; LayerCount > 0; LayerCount--) {
 		NumNeurons = Layers__[LayerCount].NumNeurons();
 		NumPrevNeurons = Layers__[LayerCount - 1].NumNeurons();
-		Gradient[LayerCount - 1] = move(Matrix2D(NumNeurons, NumPrevNeurons));
+		Gradient[LayerCount - 1] = Matrix2D(NumNeurons, NumPrevNeurons);
 		for (int i = 1; i <= NumNeurons; i++)
 			for (int j = 1; j <= NumPrevNeurons; j++) {
 				Axon = Layers__[LayerCount - 1].Neurons(j - 1).Axon();
@@ -306,7 +340,7 @@ Matrix2D Net::SumGradient() {
 		for (int i = NumInputs() + 1; i <= NumInputs() + NumOutputs(); i++)
 			Out(i - NumInputs(), 1) = TrainSet(PairCount, i);
 		// Вычисление выходов сети
-		Simulate(Inp, ResOut);
+		Simulate(Inp, ResOut, true);
 		TmpGrad = CalculateGradient(ResOut, Out);
 		if (PairCount == 1) Grad = move(TmpGrad);
 		else Grad = Grad + TmpGrad;
@@ -347,12 +381,26 @@ double Net::CalculateError() {
 // затем аксоны последнего слоя сохраняются в массив, расположенный
 // по адресу, передаваемому через параметр Outputs
 ////////////////////////////////////////////////////////////////////////////////
-void Net::Simulate(Matrix2D Inputs, Matrix2D &Outputs) {
+void Net::Simulate(Matrix2D Inputs, Matrix2D &Outputs, bool training) {
 	Layers__[0].CalculateStates(Inputs);
 	Layers__[0].CalculateAxons();
+	auto cur_a = Layers__[0].Axons();
+	//for (int i = 0; i < cur_a.size(); ++i) debugout << cur_a[i] << " ";
+	//debugout << endl;
 	for (int i = 1; i <= NumLayers(); i++) {
 		Layers__[i].CalculateStates(Layers__[i - 1].Neurons());
 		Layers__[i].CalculateAxons();
+		//cur_a = Layers__[i].Axons();
+		//for (int i = 0; i < cur_a.size(); ++i) debugout << cur_a[i] << " ";
+		//debugout << endl;
+	}
+	//if (training) 
+	{
+		/*cur_a = Layers__[NumLayers()].Axons();
+		for (int i = 0; i < cur_a.size(); ++i) debugout << cur_a[i] << " ";
+		debugout << endl;
+		debugout << endl;
+		debugout << endl;*/
 	}
 	for (int j = 1; j <= NumOutputs(); j++)
 		Outputs(j, 1) = Layers__[NumLayers()].Neurons(j - 1).Axon();
@@ -391,7 +439,7 @@ int Net::GradTrainOnLine(TrainParams Params, vector<double> &Error) {
 			WBNetToLayers();
 			PairCount++;
 		}
-		Error.emplace_back(CurrentError / 2);
+		Error.push_back(CurrentError / 2);
 		if (Error.back() <= Params.Error) return l;
 		if (StopTraining) return l;
 	}
@@ -414,7 +462,7 @@ int Net::GradTrainOffLine(TrainParams Params, vector<double> &Error) {
 		Grad = Grad / Norma;
 		WeightsBiases__ = WeightsBiases__ - Params.Rate*Grad;
 		WBNetToLayers();
-		Error.emplace_back(CalculateError());
+		Error.push_back(CalculateError());
 		if (Error.back() <= Params.Error) return l;
 		if (StopTraining) return l;
 	}
@@ -457,7 +505,7 @@ int Net::FastGradTrainOnLine(TrainParams Params, vector<double> &Error) {
 			WBNetToLayers();
 			PairCount++;
 		}
-		Error.emplace_back(CurrentError / 2.0);
+		Error.push_back(CurrentError / 2.0);
 		if (Error.back() <= Params.Error) return l;
 		if (StopTraining) return l;
 	}
@@ -482,7 +530,7 @@ int Net::FastGradTrainOffLine(TrainParams Params, vector<double> &Error) {
 		PrevWB = WeightsBiases__;
 		WeightsBiases__ = WeightsBiases__ - Params.Rate*Grad + Params.Alpha*Tmp;
 		WBNetToLayers();
-		Error.emplace_back(CalculateError());
+		Error.push_back(CalculateError());
 		if (Error.back() <= Params.Error) return l;
 		if (StopTraining) return l;
 	}
@@ -558,7 +606,7 @@ int Net::FRConjugateGradTrain(TrainParams Params, vector<double> &Error) {
 		if (EpochCount == VarCount || (Grad.Transpose()*Direction)(1, 1) <= 0) {
 			Direction = Grad; EpochCount = 0;
 		}
-		Error.emplace_back(CalculateError());
+		Error.push_back(CalculateError());
 		if (Error.back() <= Params.Error) return l;
 		if (StopTraining) return l;
 	}
@@ -573,9 +621,9 @@ int Net::RPropTrain(TrainParams Params, vector<double> &Error) {
 	Matrix2D Grad, PrevGrad, Delta;
 	double EttaPlus = 1.2, EttaMinus = 0.5, DeltaMax = 50.0, DeltaMin = 1e-6, Norma;
 	Grad = SumGradient();
-	Delta = Matrix2D(Grad.GetRowCount(), 1);
+	Delta = move(Matrix2D(Grad.GetRowCount(), 1));
 	for (int l = 0; l < Params.NumEpochs; l++) {
-		PrevGrad = Grad;
+		PrevGrad = move(Grad);
 		Grad = SumGradient();
 #ifdef DEBUG_PRINT
 		cout << "Grad before correction:" << endl;
@@ -585,7 +633,7 @@ int Net::RPropTrain(TrainParams Params, vector<double> &Error) {
 		Norma = sqrt((Grad.Transpose()*Grad)(1, 1));
 		if (Norma < Params.MinGrad) return l;
 #ifdef DEBUG_PRINT
-		WeightsBiases.Transpose().ShowElements();
+		WeightsBiases__.Transpose().ShowElements();
 		cout << endl;
 #endif
 		for (int i = 1; i <= Grad.GetRowCount(); i++) {
@@ -602,9 +650,9 @@ int Net::RPropTrain(TrainParams Params, vector<double> &Error) {
 		WBNetToLayers();
 #ifdef DEBUG_PRINT
 		cout << "After correction:" << endl;
-		WeightsBiases.Transpose().ShowElements();
+		WeightsBiases__.Transpose().ShowElements();
 #endif
-		Error.emplace_back(CalculateError());
+		Error.push_back(CalculateError());
 #ifdef DEBUG_PRINT
 		cout << Error[l] << endl << endl;
 #endif
@@ -626,11 +674,9 @@ int Net::RMSPropTrain(TrainParams Params, vector<double> &Error) {
 	G = Matrix2D(Grad.GetRowCount(), 1);
 	Delta = Matrix2D(Grad.GetRowCount(), 1);
 	for (int l = 0; l < Params.NumEpochs; l++) {
-		PrevRMS = RMS;
-		PrevG = G;
 		Grad = SumGradient();
-		G = Gamma*PrevG + (1 - Gamma)*Grad;
-		RMS = Gamma*PrevRMS + (1 - Gamma)*Grad*Grad;
+		G = Gamma*G + (1 - Gamma)*Grad;
+		RMS = Gamma*RMS + (1 - Gamma)*Grad*Grad;
 #ifdef DEBUG_PRINT
 		cout << "Grad before correction:" << endl;
 		Grad.Transpose().ShowElements();
@@ -660,11 +706,12 @@ int Net::RMSPropTrain(TrainParams Params, vector<double> &Error) {
 #ifdef DEBUG_PRINT
 		if (l % 100) cout << l << ":\t\t" << Error[l] << endl << endl;
 #endif
+		//debugout << "Error: " << Error.back() << endl;
 		if (Error.back() <= Params.Error) return l;
 		if (StopTraining) return l;
-		}
-	return Params.NumEpochs - 1;
 	}
+	return Params.NumEpochs - 1;
+}
 ////////////////////////////////////////////////////////////////////////////////
 
 
@@ -722,7 +769,7 @@ int Net::LMTrain(TrainParams Params, vector<double> &Error) {
 			Matrix2D Tmp = H + Lambda*I;
 			WeightsBiases__ = WeightsBiases__ - Tmp.Inverse()*Grad;
 			WBNetToLayers();
-			Error.emplace_back(CalculateError());
+			Error.push_back(CalculateError());
 			if (Error.back() < PrevError) {
 				PrevError = Error.back(); Lambda /= 10.0;
 				if (Lambda < 1e-20) Lambda = 1e-20;
@@ -796,7 +843,7 @@ int Net::BayesianReg(TrainParams Params, vector<double> &Error) {
 			Beta = (NumErrors - Gamma) / (2.0 * CurrentError);
 			// Вычисление регуляризационной функции ошибки
 			PrevError = Beta*CurrentError + Alpha*WBError;
-			Error.emplace_back(CurrentError);
+			Error.push_back(CurrentError);
 		}
 		else return l;
 		if (Error.back() <= Params.Error) return l;
@@ -828,12 +875,15 @@ void Net::RandomWB() {
 		// Инициализация весов и смещений сети методом Нгуена-Видроу
 		if (Layers__[i].ActivateFunction() == LINE) {
 			for (int j = 1; j <= Layers__[i].NumNeurons(); j++)
-				for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++) w(j, k) = SignedRandomVal(1);
-			for (int j = 1; j <= b.GetRowCount(); j++) b(j, 1) = SignedRandomVal(1);
+				//for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++) w(j, k) = SignedRandomVal(1);
+				for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++) w(j, k) = RandomVal(1);
+			//for (int j = 1; j <= b.GetRowCount(); j++) b(j, 1) = SignedRandomVal(1);
+			for (int j = 1; j <= b.GetRowCount(); j++) b(j, 1) = RandomVal(1);
 		}
 		else {
 			for (int j = 1; j <= Layers__[i].NumNeurons(); j++)
-				for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++) w(j, k) = SignedRandomVal(1);
+				//for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++) w(j, k) = SignedRandomVal(1);
+				for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++) w(j, k) = RandomVal(1);
 			double Beta = 0.7*pow(Layers__[i].NumNeurons(), 1 / (double)Layers__[i - 1].NumNeurons());
 			Matrix2D NormaW(Layers__[i].NumNeurons(), 1);
 			for (int j = 1; j <= Layers__[i].NumNeurons(); j++) {
@@ -845,7 +895,8 @@ void Net::RandomWB() {
 			for (int j = 1; j <= Layers__[i].NumNeurons(); j++)
 				for (int k = 1; k <= Layers__[i - 1].NumNeurons(); k++)
 					w(j, k) *= Beta / NormaW(j, 1);
-			for (int j = 1; j <= b.GetRowCount(); j++) b(j, 1) = SignedRandomVal(Beta);
+			//for (int j = 1; j <= b.GetRowCount(); j++) b(j, 1) = SignedRandomVal(Beta);
+			for (int j = 1; j <= b.GetRowCount(); j++) b(j, 1) = RandomVal(Beta);
 			double x = 0.5*(Imax - Imin), y = 0.5*(Imax + Imin);
 			w = w*x; b = b*x + y;
 			Matrix2D a(Layers__[i - 1].NumNeurons(), 1), c(Layers__[i - 1].NumNeurons(), 1);
@@ -860,20 +911,108 @@ void Net::RandomWB() {
 		Layers__[i].Biases(b);
 		Layers__[i].Weights(w);
 	}
+#ifdef POINTER_MATRIX
+	double *pw = GetWeights(), *pb = GetBiases();
+	TmpW = PointerToMatrix2D(pw, GetNumWeights(), 1);
+	TmpB = PointerToMatrix2D(pb, GetNumBiases(), 1);
+	delete[] pw;
+	delete[] pb;
+#else
 	TmpW = VectorToMatrix2D(GetWeights(), GetNumWeights(), 1);
 	TmpB = VectorToMatrix2D(GetBiases(), GetNumBiases(), 1);
+#endif
 	for (int i = 1; i <= GetNumWeights(); i++)
 		WeightsBiases__(i, 1) = TmpW(i, 1);
 	for (int i = GetNumWeights() + 1; i <= GetNumWeights() + GetNumBiases(); i++)
 		WeightsBiases__(i, 1) = TmpB(i - GetNumWeights(), 1);
 #ifdef DEBUG_PRINT
-	WeightsBiases.Transpose().ShowElements();
+	WeightsBiases__.Transpose().ShowElements();
 	cout << endl;
 #endif
 }
 ////////////////////////////////////////////////////////////////////////////////
 
 
+
+
+// Генетический алгоритм
+////////////////////////////////////////////////////////////////////////////////
+int Net::GeneticTraining(TrainParams Params, vector<double> &Error) {
+	Population OldPopulation, NewPopulation;
+	int PopulationSize = Params.PopSize;
+	double Fitness = 0.0;
+	Chromosome NewChromosome;
+	for (int i = 0; i < PopulationSize; i++) {
+		RandomWB();
+		Fitness = CalculateError();
+		NewChromosome.InitChromosome(WeightsBiases__, Fitness);
+		OldPopulation.AddChromosome(NewChromosome);
+	}
+	OldPopulation.SortPopulation(0, PopulationSize - 1);
+	for (int l = 0; l < Params.NumEpochs; l++) {
+		for (int i = 0; i < PopulationSize; i++) {
+			// Кроссовер
+			OldPopulation.Crossingover(Params.CrossoverP, Params.ParentsStrategy);
+			// Оценка приспособленности потомков
+			WeightsBiases__ = OldPopulation.Child1.GetPhenotype(); WBNetToLayers();
+			OldPopulation.Child1.FitnessValue = CalculateError();
+			WeightsBiases__ = OldPopulation.Child2.GetPhenotype(); WBNetToLayers();
+			OldPopulation.Child2.FitnessValue = CalculateError();
+			// Выбор стратегии формирования новой популяции
+			switch (Params.SelStrategy) {
+				// Глобальный отбор с участием родителей
+			case GCHP: // Инверсия
+				OldPopulation.Child1.Inversion(Params.InversionP);
+				OldPopulation.Child2.Inversion(Params.InversionP);
+				// Мутация
+				OldPopulation.Child1.Mutation(Params.MutationP);
+				OldPopulation.Child2.Mutation(Params.MutationP);
+				// Добавление потомка в новую популяцию
+				NewPopulation.AddChromosome(OldPopulation.Child1);
+				NewPopulation.AddChromosome(OldPopulation.Child2);
+				NewPopulation.AddChromosome(OldPopulation.Mother);
+				NewPopulation.AddChromosome(OldPopulation.Father);
+				break;
+				// Глобальный отбор без участия родителей
+			case GCH:  // Инверсия
+				OldPopulation.Child1.Inversion(Params.InversionP);
+				OldPopulation.Child2.Inversion(Params.InversionP);
+				// Мутация
+				OldPopulation.Child1.Mutation(Params.MutationP);
+				OldPopulation.Child2.Mutation(Params.MutationP);
+				// Добавление потомка в новую популяцию
+				NewPopulation.AddChromosome(OldPopulation.Child1);
+				NewPopulation.AddChromosome(OldPopulation.Child2);
+				break;
+				// Локальный отбор
+			case LCHP:
+			case LCH:  // Отбор потомка с наименьшим фитнесом
+				NewChromosome = OldPopulation.SelectChild(Params.SelStrategy);
+				// Инверсия
+				NewChromosome.Inversion(Params.InversionP);
+				// Мутация
+				NewChromosome.Mutation(Params.MutationP);
+				// Добавление потомка в новую популяцию
+				NewPopulation.AddChromosome(NewChromosome);
+				break;
+			}
+
+		}
+		NewPopulation.SortPopulation(0, PopulationSize - 1);
+		OldPopulation.ClearPopulation();
+		for (int i = 0; i < PopulationSize; i++)
+			OldPopulation.AddChromosome(NewPopulation.Chromosomes[i]);
+		Error.push_back(OldPopulation.Chromosomes[0].FitnessValue);
+		WeightsBiases__ = OldPopulation.Chromosomes[0].GetPhenotype();
+		WBNetToLayers();
+		NewPopulation.ClearPopulation();
+		if (Error.back() <= Params.Error) return l;
+		if (StopTraining) return l;
+	}
+	return Params.NumEpochs - 1;
+}
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 
 void Elman::InitLayers(int NumInputs, int NumLayers, int AFun[], int NumLN[]) {

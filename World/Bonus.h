@@ -31,6 +31,7 @@ public:
 	int GetType() { return Type; };
 	int GetLifeTime() { return Lifetime; };
 	virtual int GetDamage() { return Damage; };
+	bool IsDamageBonus() { return Damage != 0; };
 protected:
 	void SetType(int NewType) { Type = NewType; };
 	void SetLifetime(int NewLifetime) { Lifetime = NewLifetime; };

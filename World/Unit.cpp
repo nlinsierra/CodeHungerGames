@@ -1,9 +1,10 @@
 #include "Unit.h"
 
 void Block::Render(LPDIRECT3DDEVICE9 d3ddev) {
-	D3DCOLOR Color = D3DCOLOR_XRGB(155, 155, 155); //Grey
-	if (GetBlockType() == OCEAN) Color = D3DCOLOR_XRGB(18, 215, 208); // Sky
-	else if (GetBlockType() == FOREST) Color = D3DCOLOR_XRGB(8, 233, 68); // Green
+	//D3DCOLOR Color = D3DCOLOR_XRGB(155, 155, 155); //Grey
+	D3DCOLOR Color = D3DCOLOR_XRGB(18, 215, 208); // Sky
+	//if (GetBlockType() == OCEAN) Color = D3DCOLOR_XRGB(18, 215, 208); // Sky
+	//else if (GetBlockType() == FOREST) Color = D3DCOLOR_XRGB(8, 233, 68); // Green
 	RenderCircle(d3ddev, GetX(), GetY(), GetR(), Color);
 }
 

@@ -12,7 +12,7 @@ void Player::Render(LPDIRECT3DDEVICE9 d3ddev) {
 	double ang = M_PI / 100.0;
 	for (int i = 0; i < GetEyeCount(); ++i) {
 		int X2 = GetX() + 1000.0 * cos(ang), Y2 = GetY() - 1000.0 * sin(ang);
-		RenderLine(d3ddev, GetX(), GetY(), X2, Y2, GetEyeColor(i));
+		RenderLine(d3ddev, GetX(), GetY(), X2, Y2, Color);
 		ang += 2.0 * M_PI / GetEyeCount();
 	}
 }

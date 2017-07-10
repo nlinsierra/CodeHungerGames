@@ -24,6 +24,9 @@
     <ClInclude Include="NNet.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GeneticOperations.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MyPlayer.cpp">
@@ -36,6 +39,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="NNet.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="GeneticOperations.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

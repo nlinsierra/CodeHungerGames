@@ -159,12 +159,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="GeneticOperations.cpp" />
     <ClCompile Include="MatrixOperations.cpp" />
     <ClCompile Include="MyPlayer.cpp" />
     <ClCompile Include="MyPlayerExport.cpp" />
     <ClCompile Include="NNet.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="GeneticOperations.h" />
     <ClInclude Include="MatrixOperations.h" />
     <ClInclude Include="MyPlayer.h" />
     <ClInclude Include="NNet.h" />

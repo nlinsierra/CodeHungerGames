@@ -2,13 +2,15 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "MatrixOperations.h"
+#include "GeneticOperations.h"
 #include <vector>
 #include <string>
 #include <time.h>
 #include <functional>
 #include <map>
 #include <random>
+
+//#define DEBUG_PRINT
 
 using namespace std;
 
@@ -125,6 +127,11 @@ public:
 	void					Biases(const Matrix2D &b);
 	void					Weights(const Matrix2D &w) { Weights__ = w; };
 	void					CalculateAxons(void);
+	vector<double>			Axons() { 
+		vector<double> res;
+		for (int i = 0; i < Neurons__.size(); ++i) res.push_back(Neurons__[i].Axon());
+		return move(res);
+	};
 	void					CalculateStates(const vector<Neuron> &PrevLayer);
 	void					CalculateStates(Matrix2D Inp);
 	// Получение значений параметров
@@ -154,18 +161,22 @@ protected:
 	void					InitLayers(int NumInputs, int NumLayers, int AFun[], int NumLN[]);
 private:
 
-	vector<Matrix2D>		CalculateDelta(const Matrix2D &SimOut, const Matrix2D &AimOut);
-	Matrix2D				CalculateGradient(const Matrix2D &SimOut, const Matrix2D &AimOut);
+	vector<Matrix2D>		CalculateDelta(Matrix2D SimOut, Matrix2D AimOut);
+	Matrix2D				CalculateGradient(Matrix2D SimOut, Matrix2D AimOut);
 	Matrix2D				SumGradient();
 	double					CalculateError();
 	double					GoldSection(double &MinVal, double &MaxVal, Matrix2D Direction);
 	double					CalculateOutputError(int NumOut, int PairCount);
 	Matrix2D				CalculateJacobian();
 
-	void					WBNetToLayers();
 	void					RandomWB();
+#ifdef POINTER_MATRIX
+	double*					GetWeights();
+	double*					GetBiases();
+#else
 	vector<double>			GetWeights();
 	vector<double>			GetBiases();
+#endif
 	int						GetNumWeights();
 	int						GetNumBiases();
 
@@ -188,8 +199,9 @@ public:
 	void					InputsRanges(const Matrix2D &ir) { InputsRanges__ = ir; };
 	void					TrainSet(const Matrix2D &ts) { TrainSet__ = ts; };
 	void					WeightsBiases(const Matrix2D &wb) { WeightsBiases__ = wb; };
+	void					WBNetToLayers();
 
-	void					Simulate(Matrix2D Inputs, Matrix2D &Outputs);
+	void					Simulate(Matrix2D Inputs, Matrix2D &Outputs, bool training = false);
 
 	int						GradTrainOnLine(TrainParams Params, vector<double> &Error);
 	int						GradTrainOffLine(TrainParams Params, vector<double> &Error);
@@ -197,9 +209,10 @@ public:
 	int						FastGradTrainOffLine(TrainParams Params, vector<double> &Error);
 	int						FRConjugateGradTrain(TrainParams Params, vector<double> &Error);
 	int						RPropTrain(TrainParams Params, vector<double> &Error);
-	int						RMSPropTrain(TrainParams Params, vector<double> &Error);
+	int						RMSPropTrain(TrainParams Params, vector<double>& Error);
 	int						LMTrain(TrainParams Params, vector<double> &Error);
 	int						BayesianReg(TrainParams Params, vector<double> &Error);
+	int						GeneticTraining(TrainParams Params, vector<double> &Error);
 
 };
 ////////////////////////////////////////////////////////////////////////////////

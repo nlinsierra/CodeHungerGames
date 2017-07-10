@@ -18,94 +18,478 @@ using namespace std;
 
 const double EPS = 1e-5;
 
-random_device rd2;
-mt19937 eng2(rd2());
-uniform_int_distribution<> dst2(1, 50000);
+ofstream debug("nnetdebug.txt", ofstream::app);
 
-enum Actions { FORWARD, BACKWARD, LEFTSTEP, RIGHTSTEP, COUNT };
+enum ElementType { TFOOD, TENEMY, TBLOCK, TPOISON, TPLAYER, TCOUNT };
 
-const int SENSOR_COUNT = 8;
+
+const int SENSOR_COUNT = 20;
 const int INPUT_NEURON_COUNT = SENSOR_COUNT * 2;
-const int OUTPUT_NEURON_COUNT = 1;
-const int HIDDEN_NEURON_COUNT = INPUT_NEURON_COUNT*1.5;
-const int LAYER_COUNT = 2;
-const int EPOCH_COUNT = 100;
-const int TRAINSET_SIZE = 50;
-const int TRAINING_TICKS = 1;
-const int RANDOM_TRAINING = 1;
-int ACTIVATION_FUNCTIONS[] = {TANH, LINE};
-int LAYER_SIZES[] = { HIDDEN_NEURON_COUNT, OUTPUT_NEURON_COUNT };
+//const int OUTPUT_NEURON_COUNT = 1;
+
+enum Actions { FORWARD, BACKWARD, LEFTSTEP, RIGHTSTEP, COUNT = SENSOR_COUNT };
+
+const int OUTPUT_NEURON_COUNT = SENSOR_COUNT;
+
+const int HIDDEN_NEURON_COUNT = 100;
+const int LAYER_COUNT = 3;
+const int EPOCH_COUNT = 20;
+const int TRAINSET_SIZE = 10;
+const int MAX_EXPERIENCE = 20000;
+
+int TRAINING_TICK = 5;
+
+const int RANDOM_TRAINING_PERIOD = 1;
+const int ONLY_RUNNING = 400000;
+const int RANDOM_RATE = 100;
+int ACTIVATION_FUNCTIONS[] = {TANH, TANH, LINE};
+int LAYER_SIZES[] = { HIDDEN_NEURON_COUNT, HIDDEN_NEURON_COUNT, OUTPUT_NEURON_COUNT };
+
+double step_angle;
+
+const double DISTANCE_NORMA = 1.0;
+
+const double QL_GAMMA = 0.95;
+const double ALPHA = 0.5;
 
 Matrix2D vr(OUTPUT_NEURON_COUNT, 1);
-
 Matrix2D TrainSet;
-
 TrainParams Params;
+deque<vector<double>> VTrainSet[Actions::COUNT];
+deque<vector<double>> QTrainSet;
+vector<Net> nets;
 
-deque<vector<double>> VTrainSet[4];
+Net net, target_prediction_net;
 
+void QLearningMove(MyPlayer *me);
+void CalcQEstimationForCurrentState();
+int GetNextAction();
+void UpdateTrainingSet(int NetId, Matrix2D &inp, Matrix2D &outp);
+void RMSMove(MyPlayer *me);
+void setInput(Matrix2D &inputs, Player *me, const int eyes, World *w);
+pair<double, ElementType> getDistanceOnWall(Player *me, World *w, double angle);
+bool check(Element *player, Element *elem, double angle);
+bool check(Element *player, double x, double y, double r, double angle);
+void DoAction(MyPlayer* me, Actions action);
 
-void DoAction(MyPlayer* me, Actions action)
-{
-	switch (action)
-	{
-	case Actions::FORWARD:
-		me->StepForward();
-		break;
-
-	case Actions::BACKWARD:
-		me->StepBackward();
-		break;
-
-	case Actions::LEFTSTEP:
-		me->StepLeft();
-		break;
-
-	case Actions::RIGHTSTEP:
-		me->StepRight();
-		break;
-
-	default:
-		break;
-	}
+double DistToWall(MyPlayer* me) { 
+	double X = me->GetX(), Y = me->GetY();
+	double W = me->GetWorld()->GetWidth(), H = me->GetWorld()->GetHeight();
+	return min(min(X, W - X),min(Y, H - Y)) - me->GetR(); 
 }
 
-SYSTEMTIME st;
-bool FirstStep = true;
-vector<Net> nets;
-//NeuroNet::ElmanNetwork net;
+int tick = -1;
+int lastAction = 0;
+double lastReward = 0.0, lastLastReward = 0.0;
+Matrix2D inputs(INPUT_NEURON_COUNT, 1), lastInputs(INPUT_NEURON_COUNT, 1);
+Matrix2D output(OUTPUT_NEURON_COUNT, 1), maxlastOut(OUTPUT_NEURON_COUNT, 1);
+
+bool check(Element *player, double x, double y, double r, double angle, double step_angle)
+{
+	double xfe = cos(angle);
+	double yfe = sin(angle);
+	double xse = cos(angle + step_angle);
+	double yse = sin(angle + step_angle);
+	double xo = x - player->GetX();
+	double yo = y - player->GetY();
+
+	//angle first eye - object
+	double acos_val = (xfe*xo + yfe*yo) / sqrt(xo*xo + yo*yo);
+	double angleA = acos(acos_val);
+	if (angleA < 0.0)
+		angleA += M_PI;
+	//angle second eye - object
+	acos_val = (xse*xo + yse*yo) / sqrt(xo*xo + yo*yo);
+	double angleB = acos(acos_val);
+	if (angleB < 0.0)
+		angleB += M_PI;
+
+	return angleA - step_angle <= DBL_EPSILON && angleB - step_angle <= DBL_EPSILON;
+}
+
+
+
+
 void MyPlayer::Init()
 {
 	SetName(L"NeuroPlayer");
 	SetEyeCount(SENSOR_COUNT);
-	nets.resize(Actions::COUNT, Net(INPUT_NEURON_COUNT, LAYER_COUNT, ACTIVATION_FUNCTIONS, LAYER_SIZES));
+	step_angle = M_PI*2.0 / double(SENSOR_COUNT);
+	//nets.resize(Actions::COUNT, Net(INPUT_NEURON_COUNT, LAYER_COUNT, ACTIVATION_FUNCTIONS, LAYER_SIZES));
+	net = Net(INPUT_NEURON_COUNT, LAYER_COUNT, ACTIVATION_FUNCTIONS, LAYER_SIZES);
+	target_prediction_net = net;
 	Params.Error = 0.001;
 	Params.MinGrad = 0.00001;
 	Params.NumEpochs = EPOCH_COUNT;
-	Params.Rate = 0.001;
+	Params.Rate = 0.0005;
 }
 
-bool check(Element *player, double x, double y, double angle, double step_angle)
+void MyPlayer::Move()
 {
-	double vx = 10 * cos(angle);
-	double vy = 10 * sin(angle);
-	double vx2 = x - player->GetX();
-	double vy2 = y - player->GetY();
-	double cosa = (vx*vx2 + vy*vy2) *1.0 /
-		(
-			sqrt(vx*vx + vy*vy)
-			*sqrt(vx2*vx2 + vy2*vy2)
-			);
-	cosa = max(-1.0 + EPS, cosa);
-	cosa = min(1.0 - EPS, cosa);
-	double angleB = acos(cosa);
-	if (angleB < -FLT_MAX)
-		int y = 0;
-	//debug << " in check cosa = " << cosa << " angle = " << angleB << " result = " << (abs(angleB) <= step_angle / 2.0);
-	return abs(angleB) <= step_angle / 2.0 + EPS;
+	QLearningMove(this);
 }
 
-bool check(Element *player, double x, double y, double r, double angle, double step_angle)
+
+
+void UpdateTrainingSet(int NetId, Matrix2D &inp, Matrix2D &outp) 
+{
+	VTrainSet[NetId].emplace_back(vector<double>(INPUT_NEURON_COUNT + OUTPUT_NEURON_COUNT, 0.0));
+	if (VTrainSet[NetId].size() > MAX_EXPERIENCE)
+		VTrainSet[NetId].pop_front();
+	for (int i = 1; i <= INPUT_NEURON_COUNT; ++i) {
+		VTrainSet[NetId].back()[i - 1] = inp(i, 1);
+	}
+	for (int i = 1; i <= OUTPUT_NEURON_COUNT; ++i)
+		VTrainSet[NetId].back()[i + INPUT_NEURON_COUNT - 1] = outp(i, 1);
+
+	Matrix2D CurTrainset(min(VTrainSet[NetId].size(), TRAINSET_SIZE), INPUT_NEURON_COUNT + OUTPUT_NEURON_COUNT);
+	for (int i = 0; i < min(VTrainSet[NetId].size(), TRAINSET_SIZE); ++i) {
+		int cur_idx = dst(eng) % VTrainSet[NetId].size();
+		for (int j = 1; j <= INPUT_NEURON_COUNT; ++j) {
+			CurTrainset(i + 1, j) = VTrainSet[NetId][cur_idx][j - 1];
+		}
+		for (int j = 1; j <= OUTPUT_NEURON_COUNT; ++j)
+			CurTrainset(i + 1, j + INPUT_NEURON_COUNT) = VTrainSet[NetId][cur_idx][j + INPUT_NEURON_COUNT - 1];
+	}
+	nets[NetId].TrainSet(CurTrainset);
+}
+
+void UpdateTrainingSet(Matrix2D &inp, Matrix2D &outp)
+{
+	QTrainSet.emplace_back(vector<double>(INPUT_NEURON_COUNT + OUTPUT_NEURON_COUNT, 0.0));
+	if (QTrainSet.size() > MAX_EXPERIENCE)
+		QTrainSet.pop_front();
+	for (int i = 1; i <= INPUT_NEURON_COUNT; ++i) {
+		QTrainSet.back()[i - 1] = inp(i, 1);
+	}
+	for (int i = 1; i <= OUTPUT_NEURON_COUNT; ++i)
+		QTrainSet.back()[i + INPUT_NEURON_COUNT - 1] = outp(i, 1);
+
+	if (QTrainSet.size() < TRAINSET_SIZE) return;
+
+	Matrix2D CurTrainset(min(QTrainSet.size(), TRAINSET_SIZE), INPUT_NEURON_COUNT + OUTPUT_NEURON_COUNT);
+	vector<short> used(QTrainSet.size(), 0);
+	int cur_idx;
+	for (int i = 0; i < min(QTrainSet.size(), TRAINSET_SIZE); ++i) {
+		cur_idx = dst(eng) % QTrainSet.size();
+		while (used[cur_idx]) cur_idx = dst(eng) % QTrainSet.size();
+		used[cur_idx] = true;
+		for (int j = 1; j <= INPUT_NEURON_COUNT; ++j) {
+			CurTrainset(i + 1, j) = QTrainSet[cur_idx][j - 1];
+		}
+		for (int j = 1; j <= OUTPUT_NEURON_COUNT; ++j)
+			CurTrainset(i + 1, j + INPUT_NEURON_COUNT) = QTrainSet[cur_idx][j + INPUT_NEURON_COUNT - 1];
+	}
+	net.TrainSet(CurTrainset);
+}
+
+
+double curFullness = 0.0, lastFullness = 0.0, curHealth = 0.0, lastHealth = 0.0;
+
+void QLearningMove(MyPlayer *me)
+{
+	tick++;
+	int rnd = dst(eng);
+	int action = -1;
+	
+	// Награда за предыдущий шаг
+	double wallReward = -2*exp(-DistToWall(me) / 80.0);
+	curFullness = me->GetFullness();
+	curHealth = me->GetHealth();
+	lastReward = 10.0*(curFullness - lastFullness) + 5.0*(curHealth - lastHealth) + wallReward;
+	lastFullness = curFullness;
+	lastHealth = curHealth;
+
+	/////////////////////////////////////////////////////////////////////
+	// Новое состояние сенсоров
+	setInput(inputs, me, SENSOR_COUNT, me->GetWorld());
+	/////////////////////////////////////////////////////////////////////
+
+	// Вычисление оценки выгоды хода и выбор действия
+	CalcQEstimationForCurrentState();
+	action = GetNextAction();
+
+	//  Обновление обучающей выборки
+	if (tick)
+		//UpdateTrainingSet(lastAction, lastInputs, maxlastOut);
+		UpdateTrainingSet(lastInputs, maxlastOut);
+
+	// Ходим случайно в первый тик, обучающий период и каждый TRAINING_TICK тик
+	if ((!tick || tick <= RANDOM_TRAINING_PERIOD || tick % RANDOM_RATE == 0) && tick < ONLY_RUNNING)
+	{
+		action = rnd % Actions::COUNT;
+	}	
+
+	// Обучаем сеть каждый TRAINING_TICK тик
+	if (tick && tick % TRAINING_TICK == 0 && tick < ONLY_RUNNING)
+	{
+		vector<double> training_error;
+		//Params.NumEpochs = max(1, EPOCH_COUNT * (1.0 - tick * 1.0 / (ONLY_RUNNING)));
+		net.RMSPropTrain(Params, training_error);
+		auto WB = net.WeightsBiases();
+		auto TargetWB = target_prediction_net.WeightsBiases();
+		auto UpdatedWB = (1 - ALPHA)*TargetWB + ALPHA*WB;
+		target_prediction_net.WeightsBiases(UpdatedWB);
+		target_prediction_net.WBNetToLayers();
+	}
+
+	// Выполняем действие и сохраняем текущие действие и состояние для следующего шага
+	DoAction(me, (Actions)action);
+
+	lastAction = action;
+	lastInputs = inputs;
+	lastLastReward = lastReward;
+
+}
+
+void CalcQEstimationForCurrentState() 
+{
+	// Вычисление оценки полезности для нового состояния сенсоров
+	double Q = -DBL_MAX;
+	target_prediction_net.Simulate(inputs, output);
+	for (int i = 0; i < Actions::COUNT; ++i)
+	{
+		Q = max(output(i + 1, 1), Q);
+	}
+	output(lastAction + 1, 1) = Q*QL_GAMMA + lastReward;
+	maxlastOut = output;
+}
+
+int GetNextAction()
+{
+	int action = -1;
+	// Вычисление оценки полезности для нового состояния сенсоров
+	double Q = -DBL_MAX;
+	net.Simulate(inputs, output);
+	for (int i = 0; i < Actions::COUNT; ++i)
+	{
+		double curQ = output(i + 1, 1);
+		if (Q < curQ)
+		{
+			Q = curQ;
+			action = i;
+		}
+	}
+	return action;
+}
+
+
+void RMSMove(MyPlayer *me) 
+{
+	int rnd = dst(eng);
+	int action = rnd % Actions::COUNT;
+
+	if (tick >= ONLY_RUNNING) {
+		setInput(inputs, me, SENSOR_COUNT, me->GetWorld());
+		lastReward = -DBL_MAX;
+		for (int i = 0; i < nets.size(); ++i)
+		{
+			nets[i].Simulate(inputs, output);
+			double curReward = output(1, 1);
+			if (lastReward < curReward)
+			{
+				lastReward = curReward;
+				action = i;
+			}
+		}
+		DoAction(me, (Actions)action);
+		return;
+	}
+
+	tick++;
+
+	/////////////////////////////////////////////////////////////////////
+	setInput(inputs, me, SENSOR_COUNT, me->GetWorld());
+	/////////////////////////////////////////////////////////////////////
+	lastReward = me->GetFullness() + me->GetHealth();
+
+	if (tick)
+	{
+		VTrainSet[lastAction].emplace_back(vector<double>(INPUT_NEURON_COUNT + OUTPUT_NEURON_COUNT, 0.0));
+		if (VTrainSet[lastAction].size() > TRAINSET_SIZE)
+			VTrainSet[lastAction].pop_front();
+		for (int i = 1; i <= INPUT_NEURON_COUNT; ++i)
+			VTrainSet[lastAction].back()[i - 1] = lastInputs(i, 1);
+		for (int i = 1; i <= OUTPUT_NEURON_COUNT; ++i)
+			VTrainSet[lastAction].back()[i + INPUT_NEURON_COUNT - 1] = lastReward;
+		nets[lastAction].TrainSet(Matrix2D(VTrainSet[lastAction]));
+		if (tick <= RANDOM_TRAINING_PERIOD || tick % TRAINING_TICK == 0)
+		{
+			vector<double> training_error;
+			nets[lastAction].RMSPropTrain(Params, training_error);
+		}
+	}
+
+	if (tick <= RANDOM_TRAINING_PERIOD || tick % TRAINING_TICK == 0)
+	{
+		action = rnd % Actions::COUNT;
+	}
+	else
+	{
+		double Q = -DBL_MAX;
+		for (int i = 0; i < nets.size(); ++i)
+		{
+			nets[i].Simulate(inputs, output);
+			double curQ = output(1, 1);
+
+			if (Q < curQ)
+			{
+				Q = curQ;
+				action = i;
+			}
+		}
+	}
+
+	lastInputs = inputs;
+	DoAction(me, (Actions)action);
+	lastAction = action;
+}
+
+void setInput(Matrix2D &inputs, Player *me, const int eyes, World *w)
+{
+	double angle = M_PI / 100.0;
+
+	vector<pair<double, ElementType>> sensors(eyes, make_pair(DBL_MAX, ElementType::TCOUNT));
+	int eye = 0;
+	while (angle < 2 * M_PI + M_PI / 100.0)
+	{
+		double min_dist = DBL_MAX;
+		double dist = DBL_MAX;
+		ElementType cur_type = ElementType::TENEMY;
+		int life_time = INT_MAX;
+
+		//food
+		for each (auto cur1 in w->GetFood())
+		{
+			dist = me->GetDistanceTo(cur1);
+			//debug << cur->GetX() << " " << cur->GetY() << endl;
+			if (check(me, cur1, angle) && dist < min_dist)
+			{
+				min_dist = dist;
+				life_time = cur1->GetLifeTime();
+				if (cur1->IsDamageBonus())
+					cur_type = ElementType::TPOISON;
+				else cur_type = ElementType::TFOOD;
+			}
+
+		}
+
+		//players
+		for each (auto cur2 in w->GetPlayers())
+		{
+			if (cur2 == me) continue;
+			if (check(me, cur2, angle) && dist < min_dist)
+			{
+				min_dist = dist;
+				cur_type = ElementType::TENEMY;
+				life_time = cur2->GetSpeed();
+			}
+
+		}
+
+		//block
+		for each (auto cur3 in w->GetBlocks())
+		{
+			dist = me->GetDistanceTo(cur3);
+			if (check(me, cur3, angle) && dist < min_dist)
+			{
+				min_dist = dist;
+				cur_type = ElementType::TBLOCK;
+			}
+		}
+
+
+		auto res = getDistanceOnWall(me, w, angle);
+
+		if (min_dist > res.first)
+		{
+			min_dist = res.first;
+			cur_type = res.second;
+		}
+		
+		inputs(eye + 1, 1) = min_dist / DISTANCE_NORMA;
+		inputs(eye + 2, 1) = cur_type;
+		//inputs(eye + 3, 1) = life_time;
+
+		//debug << "eye " << min_dist << " " << elty[cur_type] << endl;
+		eye += 2;
+		angle += step_angle;
+	}
+}
+
+pair<double, ElementType> getDistanceOnWall(Player *me, World *w, double angle)
+{
+	double x0 = me->GetX();
+	double y0 = me->GetY();
+	double k = -tan(angle);
+
+	double min_dist = DBL_MAX;
+	
+	//пересечение только с горизонтальными сторонами
+	if (abs(angle - M_PI / 2) <= DBL_EPSILON) min_dist = min(min_dist, me->GetY());
+	else if (abs(angle - 3 * M_PI / 2) <= DBL_EPSILON) min_dist = min(min_dist, w->GetHeight() - me->GetY());
+	//пересечение только с вертилкальными сторонами
+	else if (abs(angle) <= DBL_EPSILON) min_dist = min(min_dist, w->GetWidth() - me->GetX());
+	else if (abs(angle - M_PI) <= DBL_EPSILON) min_dist = min(min_dist, me->GetX());
+	//случайные пересечения
+	else
+	{
+		/*
+		система:
+		y = 0, при 0.0 <= x <= getw();
+		y = geth(), при 0.0 <= x <= getw();
+
+		x = 0, при 0.0 <= y <= geth();
+		x = getw(), при 0.0 <= y <= geth();
+		*/
+
+		//y = 0
+		double b = y0 - k*x0;
+		double y = 0.0;
+		double x = (y - b) / k;
+
+		double origin_vx = cos(angle), origin_vy = -sin(angle);
+
+		double vx = x - x0, vy = y - y0;
+		double cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
+		if (x >= -EPS && x <= w->GetWidth() + EPS && abs(cosv - 1.0) <= EPS)
+			min_dist = min(min_dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
+		
+		//y=geth
+		y = w->GetHeight();
+		x = (y - b) / k;
+		vx = x - x0, vy = y - y0;
+		cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
+		if (x >= -EPS && x <= w->GetWidth() + EPS && abs(cosv - 1.0) <= EPS)
+			min_dist = min(min_dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
+
+		//x=0
+		x = 0.0;
+		y = k*x + b;
+		vx = x - x0, vy = y - y0;
+		cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
+		if (y >= -EPS && y <= w->GetHeight() + EPS && abs(cosv - 1.0) <= EPS)
+			min_dist = min(min_dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
+
+		//x=getw
+		x = w->GetWidth();
+		y = k*x + b;
+		vx = x - x0, vy = y - y0;
+		cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
+		if (y >= -EPS && y <= w->GetHeight() + EPS && abs(cosv - 1.0) <= EPS)
+			min_dist = min(min_dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
+	}
+
+	return make_pair(min_dist / DISTANCE_NORMA, ElementType::TBLOCK);
+}
+
+bool check(Element *player, Element *elem, double angle)
+{
+	return check(player, elem->GetX(), elem->GetY(), elem->GetR(), angle);
+	//return check(player, elem->GetX(), elem->GetY(), elem->GetR(), angle, step_angle);
+}
+
+bool check(Element *player, double x, double y, double r, double angle)
 {
 	double x0 = player->GetX(), y0 = player->GetY();
 	double x2 = x0 + 1.0 * cos(angle), y2 = y0 - 1.0*sin(angle);
@@ -135,310 +519,32 @@ bool check(Element *player, double x, double y, double r, double angle, double s
 	return false;
 }
 
-
-
-bool check(Element *player, Element *elem, double angle, double step_angle)
+void DoAction(MyPlayer* me, Actions action)
 {
-	//return check(player, elem->GetX(), elem->GetY(), angle, step_angle);
-	return check(player, elem->GetX(), elem->GetY(), elem->GetR(), angle, step_angle);
-}
-
-
-enum ElementType { TFOOD, TENEMY, TBLOCK, TCOUNT };
-string elty[] = { "FOOD", "ENEMY", "BLOCK", "COUNT" };
-
-pair<double, ElementType> getDistanceOnWall(Player *me, World *w, double angle, double step_angle)
-{
-	//debug << "start" << endl;
-	double x0 = me->GetX();
-	double y0 = me->GetY();
-	double k = -tan(angle);
-	double angleB;
-	//debug << "inited" << endl;
-
-	//Y = 0, x = 0..getw
-	double dist = DBL_MAX;
-	double min_dist = DBL_MAX;
-	ElementType cur_type = ElementType::TENEMY;
-	//debug << "before if" << endl;
-	if (abs(angle - M_PI / 2) <= DBL_EPSILON)
-	{
-		//debug << "in first if" << endl;
-		//пересечение только с горизонтальными сторонами
-		dist = min(dist, me->GetY());
-		if (min_dist > dist)
-		{
-			min_dist = dist;
-			cur_type = ElementType::TBLOCK;
-		}
-	}
-	else if (abs(angle - 3 * M_PI / 2) <= DBL_EPSILON)
-	{
-		//debug << "in first if" << endl;
-		//пересечение только с горизонтальными сторонами
-		dist = min(dist, w->GetHeight() - me->GetY());
-		if (min_dist > dist)
-		{
-			min_dist = dist;
-			cur_type = ElementType::TBLOCK;
-		}
-	}
-	else if (abs(angle) <= DBL_EPSILON)
-	{
-		//debug << "in second if" << endl;
-		//пересечение только с вертилкальными сторонами
-		dist = min(dist, w->GetWidth() - me->GetX());
-		if (min_dist > dist)
-		{
-			min_dist = dist;
-			cur_type = ElementType::TBLOCK;
-		}
-	}
-	else if (abs(angle - M_PI) <= DBL_EPSILON)
-	{
-		//debug << "in second if" << endl;
-		//пересечение только с вертилкальными сторонами
-		dist = min(dist, me->GetX());
-		if (min_dist > dist)
-		{
-			min_dist = dist;
-			cur_type = ElementType::TBLOCK;
-		}
-	}
-	else
-	{
-		//debug << "in else" << endl;
-		//случайные пересечения
-		/*
-		система:
-		y = 0, при 0.0 <= x <= getw();
-		y = geth(), при 0.0 <= x <= getw();
-
-		x = 0, при 0.0 <= y <= geth();
-		x = getw(), при 0.0 <= y <= geth();
-		*/
-
-		//y = 0
-		double b = y0 - k*x0;
-		double y = 0.0;
-		double x = (y - b) / k;
-
-		double origin_vx = cos(angle), origin_vy = -sin(angle);
-
-		double vx = x - x0, vy = y - y0;
-		double cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
-		//debug << "1xy b = " << b << " x = " << x << " y = " << y;
-		if (x >= -EPS && x <= w->GetWidth() + EPS && /*check(me, x, y, angle, step_angle)*/ abs(cosv - 1.0) <= EPS)
-		{
-			//debug << " dist = " << sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0));
-			dist = min(dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
-		}
-		//debug << endl;
-		//y=geth
-		y = w->GetHeight();
-		x = (y - b) / k;
-		vx = x - x0, vy = y - y0;
-		cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
-		//debug << "2xy b = " << b << " x = " << x << " y = " << y;
-		if (x >= -EPS && x <= w->GetWidth() + EPS && abs(cosv - 1.0) <= EPS)
-		{
-			//debug << " dist = " << sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0));
-			dist = min(dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
-		}
-		//debug << endl;
-
-		//x=0
-		x = 0.0;
-		y = k*x + b;
-		vx = x - x0, vy = y - y0;
-		cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
-		//debug << "3xy b = " << b << " x = " << x << " y = " << y;
-		if (y >= -EPS && y <= w->GetHeight() + EPS && abs(cosv - 1.0) <= EPS)
-		{
-			//debug << " dist = " << sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0));
-			dist = min(dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
-		}
-		//debug << endl;
-
-		//x=getw
-		x = w->GetWidth();
-		y = k*x + b;
-		vx = x - x0, vy = y - y0;
-		cosv = (origin_vx*vx + origin_vy * vy) / sqrt(vx*vx + vy*vy);
-		//debug << "4xy b = " << b << " x = " << x << " y = " << y;
-		if (y >= -EPS && y <= w->GetHeight() + EPS && abs(cosv - 1.0) <= EPS)
-		{
-			//debug << " dist = " << sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0));
-			dist = min(dist, sqrt((x - x0)*(x - x0) + (y - y0)*(y - y0)));
-		}
-		//debug << endl;
-
-		if (min_dist > dist)
-		{
-			min_dist = dist;
-			cur_type = ElementType::TBLOCK;
-		}
-	}
-	//debug << "return" << endl;
-
-	//debug << min_dist << " " << elty[cur_type] << endl;
-	return make_pair(min_dist, cur_type);
-}
-
-void setInput(Matrix2D &inputs, Player *me, const int eyes, World *w)
-{
-	const double step_angle = M_PI*2.0 / eyes;
-	double angle = M_PI / 100.0;
-
-	vector<pair<double, ElementType>> sensors(eyes, make_pair(DBL_MAX, ElementType::TCOUNT));
-	int eye = 0;
-	while (angle < 2 * M_PI + M_PI / 100.0)
-	{
-		double min_dist = DBL_MAX;
-		double dist = DBL_MAX;
-		ElementType cur_type = ElementType::TENEMY;
-		//food
-		for each (auto cur in w->GetFood())
-		{
-			dist = me->GetDistanceTo(cur);
-			//debug << cur->GetX() << " " << cur->GetY() << endl;
-			if (check(me, cur, angle, step_angle) && dist < min_dist)
-			{
-				//debug << "food dist = " << dist << endl;
-				min_dist = dist;
-				cur_type = ElementType::TFOOD;
-			}
-
-		}
-
-		//block
-		for each (auto cur in w->GetBlocks())
-		{
-			dist = me->GetDistanceTo(cur);
-			if (check(me, cur, angle, step_angle) && dist < min_dist)
-			{
-				min_dist = dist;
-				cur_type = ElementType::TBLOCK;
-			}
-		}
-		if (cur_type == TENEMY)
-			int y = 0;
-
-
-		auto res = getDistanceOnWall(me, w, angle, step_angle);
-		if (res.second == TENEMY)
-			int y = 0;
-
-		if (min_dist > res.first)
-		{
-			min_dist = res.first;
-			cur_type = res.second;
-		}
-		if (cur_type == TENEMY)
-			int y = 0;
-		inputs(eye + 1, 1) = min_dist;
-		inputs(eye + 2, 1) = cur_type;
-
-		//debug << "eye " << min_dist << " " << elty[cur_type] << endl;
-		eye += 2;
-		angle += step_angle;
-	}
-
-
-}
-
-int lasttest = -1;
-int tick = -1;
-int lastAction = 0;
-double Q, lastQ = 0.0;
-Matrix2D inputs(INPUT_NEURON_COUNT, 1), LastInputs(INPUT_NEURON_COUNT, 1);
-Matrix2D output(OUTPUT_NEURON_COUNT, 1);
-
-void MyPlayer::Move()
-{
-	tick++;
+	double angle = 2 * M_PI / SENSOR_COUNT;
+	double start_angle = M_PI / 100;
+	//me->MoveTo(me->GetX() + 600.0 * cos(start_angle + angle*action + 0.5*angle), me->GetY() - 600.0 * sin(start_angle + angle*action + 0.5*angle));
+	me->MoveTo(me->GetX() + 600.0 * cos(start_angle + angle*action), me->GetY() - 600.0 * sin(start_angle + angle*action));
 	
-	//Input order: My coordinates, Health, Fullness, Angle, Food coordinates, Enemy coordinates, Trap coordinates, Poison coordinates, Cornucopia coordinates, Block coordinates
-
-	/////////////////////////////////////////////////////////////////////
-	///////////////////////// InitFill input vector /////////////////////////
-	setInput(inputs, this, SENSOR_COUNT, GetWorld());
-	/////////////////////////////////////////////////////////////////////
-	//debug << inputs << endl;
-	vr(1, 1) = GetFullness();
-
-	int rnd = dst2(eng2);
-	int action = rnd % Actions::COUNT;
-	if (!FirstStep)
+	/*switch (action)
 	{
-		/*int maxtests = 500;
-		int mintest = 100;
-		if (TrainingSet.size() > maxtests)
-		{
-			vector<NeuroNet::Problem> vp;
-			int ct = mintest;
-			while (ct--)
-				vp.push_back(TrainingSet[dist(eng) % TrainingSet.size()]);
-		}*/
-		VTrainSet[lastAction].emplace_back(move(vector<double>(INPUT_NEURON_COUNT + OUTPUT_NEURON_COUNT)));
-		if (VTrainSet[lastAction].size() > TRAINSET_SIZE)
-			VTrainSet[lastAction].pop_front();
-		for (int i = 1; i <= INPUT_NEURON_COUNT; ++i)
-			VTrainSet[lastAction].back()[i - 1] = LastInputs(i, 1);
-		for (int i = 1; i <= OUTPUT_NEURON_COUNT; ++i)
-			VTrainSet[lastAction].back()[i + INPUT_NEURON_COUNT - 1] = vr(i, 1);
-		nets[lastAction].TrainSet(Matrix2D(VTrainSet[lastAction]));
-		if (tick <= RANDOM_TRAINING*TRAINING_TICKS ||  tick % 5 == 0)
-		{
-			//debug << "TICK " << tick << endl;
-			vector<double> training_error;
-			nets[lastAction].RMSPropTrain(Params, training_error);
-		}
-	}
+	case Actions::FORWARD:
+		me->StepForward();
+		break;
 
-	//	debug << "R = " << r << endl;
-	/*if (tick <= TRAINING_TICKS) {
-		if (tick <= TRAINING_TICKS / 4) {
-			action = Actions::FORWARD;
-		}
-		else if (tick <= TRAINING_TICKS / 2) action = Actions::LEFTSTEP;
-		else if (tick <= 3 * TRAINING_TICKS / 4) action = Actions::BACKWARD;
-		else action = Actions::RIGHTSTEP;
-	}
-	else */
-		if (tick <= RANDOM_TRAINING*TRAINING_TICKS || tick % 5 == 0)
-	{
-		//	debug << "RAND: " << endl;;
+	case Actions::BACKWARD:
+		me->StepBackward();
+		break;
 
-		Q = vr(1, 1);
-		action = rnd % Actions::COUNT;
-	}
-	else
-	{
+	case Actions::LEFTSTEP:
+		me->StepLeft();
+		break;
 
-		//debug << "Before Learn" << endl;
-		Q = -DBL_MAX;
-		for (int i = 0; i < nets.size(); ++i)
-		{
-			
-			nets[i].Simulate(inputs, output);
-			double curQ = output(1, 1);
-			//debug << curQ << " " << i << endl;
+	case Actions::RIGHTSTEP:
+		me->StepRight();
+		break;
 
-			if (Q < curQ)
-			{
-				Q = curQ;
-				action = i;
-			}
-		}
-		//debug << "After Learn" << endl;
-	}
-
-	//debug << "SELECT " << Q << " " << action << endl << "=================================================================" << endl;
-
-	LastInputs = inputs;
-	DoAction(this, (Actions)action);
-	FirstStep = false;
-
-	lastAction = action;
+	default:
+		break;
+	}*/
 }
